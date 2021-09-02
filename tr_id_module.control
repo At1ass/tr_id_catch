@@ -1,0 +1,6 @@
+#Transacion Id change catch module
+comment = 'tr_id_module'
+default_version = '1.0'
+module_pathname = '$libdir/tr_id_module'
+relocatable = true
+superuser = true

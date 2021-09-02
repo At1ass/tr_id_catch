@@ -1,0 +1,10 @@
+CREATE FUNCTION get_top_tr_id()
+RETURNS bigint
+AS 'MODULE_PATHNAME', 'get_top_tr_id'
+LANGUAGE C STRICT;
+
+CREATE FUNCTION set_new_log() 
+RETURNS void
+AS 'MODULE_PATHNAME', 'set_new_log'
+LANGUAGE C STRICT;
+
