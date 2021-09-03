@@ -20,7 +20,7 @@ PG_MODULE_MAGIC;
 typedef struct {
     LWLock lock;
     size_t num_elem;
-    uint64 data[50];
+    uint64 data[1024];
 } FullTransactionIdSharedState;
 
 static volatile sig_atomic_t got_sigterm = false;
@@ -62,21 +62,26 @@ void stop_logging(void) {
     elog(LOG, "Logging stopped");
 }
 
-void start_logging(char*);
-void start_logging(char* path) {
-    log_file = fopen(path, "a+");
+void start_logging(void);
+void start_logging(void) {
+    if (log_path != NULL)
+	log_file = fopen(log_path, "a+");
+    else
+	log_file = fopen(default_log_path, "a+");
 
     elog(LOG, "Logging started");
 }
 
 PG_FUNCTION_INFO_V1(set_new_log);
 Datum set_new_log(PG_FUNCTION_ARGS) {
-    //    elog(LOG, "Start switching: new path - %s", log_path);
+    elog(LOG, "Start switching: new path - %s", log_path);
 
-    //    stop_logging();
+    stop_logging();
 
-    //  start_logging(log_path);
+    start_logging();
     elog(LOG, "Switch finished");
+
+    PG_RETURN_VOID();
 }
 
 PG_FUNCTION_INFO_V1(get_top_tr_id);
@@ -123,17 +128,17 @@ void spooler_main(Datum main_arg) {
 
 	// if (c % 10000 != 0) continue;
 
-	LWLockAcquire(&fti_state->lock, LW_EXCLUSIVE);
 	// tr.value = fti_state->data.value;
 	if (fti_state->num_elem > 10) {
 	    need_clean = true;
+	    LWLockAcquire(&fti_state->lock, LW_EXCLUSIVE);
 	    buf = palloc(fti_state->num_elem * sizeof(uint64));
 	    memcpy(buf, fti_state->data, fti_state->num_elem * sizeof(uint64));
 	    memset(fti_state->data, 0, fti_state->num_elem * sizeof(uint64));
 	    size = fti_state->num_elem;
 	    fti_state->num_elem = 0;
+	    LWLockRelease(&fti_state->lock);
 	}
-	LWLockRelease(&fti_state->lock);
 	if (need_clean) {
 	    for (size_t i = 0; i < size; ++i) {
 		// elog(LOG, "TransactionId from spooler_main: %lu", buf[i]);
@@ -154,17 +159,15 @@ void spooler_main(Datum main_arg) {
 
 void _PG_init(void);
 void _PG_init(void) {
-    if (!process_shared_preload_libraries_in_progress) return;
     BackgroundWorker bg_worker;
+    if (!process_shared_preload_libraries_in_progress) return;
+
+    if (IsUnderPostmaster) {
+	init_shmem();
+	return;
+    }
     DefineCustomStringVariable("tr_id_module.log_path", "log_path", NULL,
-			       &log_path, "", PGC_USERSET, 0, NULL, NULL, NULL);
-
-    //    if (!process_shared_preload_libraries_in_progress) {
-    //	elog(LOG, "process_shared_preload_libraries_in_progress =
-    // false"); 	return;
-    //    }
-
-    //    if (process_shared_preload_libraries_in_progress) {
+			       &log_path, "", PGC_SIGHUP, 0, NULL, NULL, NULL);
 
     shmem_startup_hook = init_shmem;
     memset(&bg_worker, 0, sizeof(bg_worker));
@@ -199,8 +202,7 @@ void _PG_init(void) {
     //    if (!RegisterDynamicBackgroundWorker(&bg_worker, &handler)) {
     //	ereport(ERROR, (errmsg("ALARM")));
     //    }
-    if (IsUnderPostmaster) init_shmem();
-    start_logging(default_log_path);
+    start_logging();
     RegisterXactCallback(FTI_inv_callback, NULL);
 }
 
