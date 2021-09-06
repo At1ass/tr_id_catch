@@ -1,5 +1,6 @@
 #include "postgres.h"
 
+#include "access/xact.h"
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "postmaster/bgworker.h"
@@ -74,7 +75,7 @@ static FullTransactionId tr_id;
 void FTI_inv_callback(XactEvent event, void* arg) {
     if (event != XACT_EVENT_PRE_COMMIT) return;
 
-    tr_id = GetTopFullTransactionId();
+    tr_id = GetCurrentFullTransactionIdIfAny();
     LWLockAcquire(&fti_state->lock, LW_EXCLUSIVE);
 
     fti_state->data[fti_state->num_elem] = U64FromFullTransactionId(tr_id);
