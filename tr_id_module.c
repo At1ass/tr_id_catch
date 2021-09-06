@@ -76,6 +76,8 @@ void FTI_inv_callback(XactEvent event, void* arg) {
     if (event != XACT_EVENT_PRE_COMMIT) return;
 
     tr_id = GetCurrentFullTransactionIdIfAny();
+    if (!FullTransactionIdIsValid(tr_id)) return;
+
     LWLockAcquire(&fti_state->lock, LW_EXCLUSIVE);
 
     fti_state->data[fti_state->num_elem] = U64FromFullTransactionId(tr_id);
