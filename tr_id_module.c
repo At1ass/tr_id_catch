@@ -21,7 +21,7 @@ PG_MODULE_MAGIC;
 typedef struct {
     LWLock lock;
     size_t num_elem;
-    uint64 data[1024];
+    char data[8192];
 } FullTransactionIdSharedState;
 
 // signals variables
@@ -61,6 +61,7 @@ void _PG_init(void);
 //-------------------
 //
 static FullTransactionIdSharedState* fti_state = NULL;
+static char buffer[21];
 
 static char* log_path = NULL;
 static FILE* log_file = NULL;
@@ -74,6 +75,7 @@ static FullTransactionId tr_id;
 
 void
 FTI_inv_callback(XactEvent event, void* arg) {
+    int s;
     if (event != XACT_EVENT_PRE_COMMIT)
         return;
 
@@ -83,7 +85,11 @@ FTI_inv_callback(XactEvent event, void* arg) {
 
     LWLockAcquire(&fti_state->lock, LW_EXCLUSIVE);
 
-    fti_state->data[fti_state->num_elem] = U64FromFullTransactionId(tr_id);
+    s = sprintf(buffer, "%lu", U64FromFullTransactionId(tr_id));
+    memset(buffer + s, 32, 21 - s);
+    buffer[20] = '\n';
+    memcpy(fti_state->data + fti_state->num_elem * 21, buffer, 21);
+
     fti_state->num_elem++;
 
     LWLockRelease(&fti_state->lock);
@@ -131,7 +137,7 @@ init_shmem(void) {
 
     if (!found) {
         LWLockInitialize(&fti_state->lock, LWLockNewTrancheId());
-        memset(fti_state->data, 0, sizeof(FullTransactionId) * 50);
+        memset(fti_state->data, 0, 8192 * sizeof(char));
         fti_state->num_elem = 0;
     }
 
@@ -141,10 +147,6 @@ init_shmem(void) {
 
 void
 spooler_main(Datum main_arg) {
-    uint64* buf;
-    size_t size;
-    bool need_clean = false;
-
     pqsignal(SIGTERM, tim_sigterm_hadler);
     pqsignal(SIGHUP, tim_sighup_hadler);
     pqsignal(SIGUSR1, procsignal_sigusr1_handler);
@@ -154,21 +156,15 @@ spooler_main(Datum main_arg) {
 
     while (!got_sigterm) {
         if (fti_state->num_elem > spool_limit) {
-            need_clean = true;
             LWLockAcquire(&fti_state->lock, LW_EXCLUSIVE);
-            buf = palloc(fti_state->num_elem * sizeof(uint64));
-            memcpy(buf, fti_state->data, fti_state->num_elem * sizeof(uint64));
-            memset(fti_state->data, 0, fti_state->num_elem * sizeof(uint64));
-            size = fti_state->num_elem;
-            fti_state->num_elem = 0;
-            LWLockRelease(&fti_state->lock);
-        }
-        if (need_clean) {
-            for (size_t i = 0; i < size; ++i) {
-                fprintf(log_file, "FullTransactionId: %lu\n", buf[i]);
-            }
+            elog(LOG, "%s\n", fti_state->data);
+
+            fprintf(log_file, "%s\n", fti_state->data);
             fflush(log_file);
-            need_clean = false;
+            memset(fti_state->data, 0, 8192);
+            fti_state->num_elem = 0;
+
+            LWLockRelease(&fti_state->lock);
         }
     }
 
