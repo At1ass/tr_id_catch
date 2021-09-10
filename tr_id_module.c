@@ -16,12 +16,15 @@
 #include "access/xact.h"
 #include "utils/guc_tables.h"
 
+#define BUFFERLEN 21
+#define FLUSH_BUFFER_LEN 8192
+
 PG_MODULE_MAGIC;
 
 typedef struct {
     LWLock lock;
     size_t num_elem;
-    char data[8192];
+    char data[FLUSH_BUFFER_LEN];
 } FullTransactionIdSharedState;
 
 // signals variables
@@ -61,7 +64,7 @@ void _PG_init(void);
 //-------------------
 //
 static FullTransactionIdSharedState* fti_state = NULL;
-static char buffer[21];
+static char buffer[BUFFERLEN];
 
 static char* log_path = NULL;
 static FILE* log_file = NULL;
@@ -86,9 +89,10 @@ FTI_inv_callback(XactEvent event, void* arg) {
     LWLockAcquire(&fti_state->lock, LW_EXCLUSIVE);
 
     s = sprintf(buffer, "%lu", U64FromFullTransactionId(tr_id));
-    memset(buffer + s, 32, 21 - s);
-    buffer[20] = '\n';
-    memcpy(fti_state->data + fti_state->num_elem * 21, buffer, 21);
+    memset(buffer + s, 32, BUFFERLEN - s);
+    buffer[BUFFERLEN - 1] = '\n';
+    memcpy(fti_state->data + fti_state->num_elem * BUFFERLEN, buffer,
+           BUFFERLEN);
 
     fti_state->num_elem++;
 
@@ -137,7 +141,7 @@ init_shmem(void) {
 
     if (!found) {
         LWLockInitialize(&fti_state->lock, LWLockNewTrancheId());
-        memset(fti_state->data, 0, 8192 * sizeof(char));
+        memset(fti_state->data, 0, FLUSH_BUFFER_LEN * sizeof(char));
         fti_state->num_elem = 0;
     }
 
@@ -161,7 +165,7 @@ spooler_main(Datum main_arg) {
 
             fprintf(log_file, "%s\n", fti_state->data);
             fflush(log_file);
-            memset(fti_state->data, 0, 8192);
+            memset(fti_state->data, 0, FLUSH_BUFFER_LEN);
             fti_state->num_elem = 0;
 
             LWLockRelease(&fti_state->lock);
@@ -185,7 +189,7 @@ _PG_init(void) {
                                &log_path, "/home/postgres/log_tr_id_catch",
                                PGC_SIGHUP, 0, NULL, NULL, NULL);
     DefineCustomIntVariable("tr_id_module.spool_limit", "log_path", NULL,
-                            &spool_limit, 100, 15, 900, PGC_SIGHUP, 0, NULL,
+                            &spool_limit, 100, 15, 250, PGC_SIGHUP, 0, NULL,
                             NULL, NULL);
 
     shmem_startup_hook = init_shmem;
